@@ -295,7 +295,7 @@ def fetch_live_ticker_strip():
     symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT"]
     items = []
     try:
-        resp = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=4)
+        resp = requests.get("https://data-api.binance.vision/api/v3/ticker/24hr", timeout=4)
         if resp.status_code == 200:
             data_map = {d["symbol"]: d for d in resp.json() if d.get("symbol") in symbols}
             for s in symbols:
@@ -335,7 +335,7 @@ def fetch_binance_terminal_info(symbol: str = "BTCUSDT"):
         "bids": []
     }
     try:
-        r24 = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={clean_sym}", timeout=3)
+        r24 = requests.get(f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={clean_sym}", timeout=3)
         if r24.status_code == 200:
             d = r24.json()
             info["last_price"] = float(d.get("lastPrice", 0.0))
@@ -349,14 +349,14 @@ def fetch_binance_terminal_info(symbol: str = "BTCUSDT"):
         pass
 
     try:
-        r_ars = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=USDTARS", timeout=2)
+        r_ars = requests.get("https://data-api.binance.vision/api/v3/ticker/price?symbol=USDTARS", timeout=2)
         if r_ars.status_code == 200:
             info["usdt_ars"] = float(r_ars.json().get("price", 1450.0))
     except Exception:
         pass
 
     try:
-        r_depth = requests.get(f"https://api.binance.com/api/v3/depth?symbol={clean_sym}&limit=8", timeout=3)
+        r_depth = requests.get(f"https://data-api.binance.vision/api/v3/depth?symbol={clean_sym}&limit=8", timeout=3)
         if r_depth.status_code == 200:
             depth = r_depth.json()
             info["asks"] = [(float(p), float(q)) for p, q in depth.get("asks", [])[:8]][::-1]

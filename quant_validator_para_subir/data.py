@@ -142,23 +142,35 @@ def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "1h", limit: int
     if not clean_sym.endswith("USDT") and not clean_sym.endswith("FDUSD") and not clean_sym.endswith("BTC"):
         clean_sym += "USDT"
 
-    url = "https://api.binance.com/api/v3/klines"
+    endpoints = [
+        "https://data-api.binance.vision/api/v3/klines",
+        "https://api.binance.com/api/v3/klines",
+        "https://api1.binance.com/api/v3/klines",
+        "https://api.binance.us/api/v3/klines",
+    ]
     params = {
         "symbol": clean_sym,
         "interval": interval,
         "limit": min(1000, max(300, limit))
     }
 
-    try:
-        resp = requests.get(url, params=params, timeout=12)
-        if resp.status_code != 200:
-            raise ValueError(f"Binance API devolvio error {resp.status_code}: {resp.text}")
-        data = resp.json()
-    except Exception as e:
-        raise ValueError(f"Error al conectar con Binance API para '{clean_sym}': {e}")
+    data = None
+    last_err = ""
+    for url in endpoints:
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                cand = resp.json()
+                if isinstance(cand, list) and len(cand) > 0:
+                    data = cand
+                    break
+            else:
+                last_err = f"HTTP {resp.status_code}"
+        except Exception as e:
+            last_err = str(e)
 
-    if not data or not isinstance(data, list) or len(data) == 0:
-        raise ValueError(f"No se obtuvieron velas desde Binance para el par '{clean_sym}'.")
+    if not data:
+        raise ValueError(f"Error al conectar con Binance API para '{clean_sym}': {last_err}")
 
     raw_df = pd.DataFrame(data, columns=[
         'open_time', 'open', 'high', 'low', 'close', 'volume',

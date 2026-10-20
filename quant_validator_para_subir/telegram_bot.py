@@ -34,16 +34,17 @@ def load_json(path: str) -> dict:
 
 
 def fetch_live_price(symbol: str, fallback: float = 0.0) -> float:
-    try:
-        r = requests.get(
-            "https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": symbol.upper()},
-            timeout=5
-        )
-        if r.status_code == 200:
-            return float(r.json().get("price", fallback))
-    except Exception:
-        pass
+    for base_url in ("https://data-api.binance.vision", "https://api.binance.com"):
+        try:
+            r = requests.get(
+                f"{base_url}/api/v3/ticker/price",
+                params={"symbol": symbol.upper()},
+                timeout=5
+            )
+            if r.status_code == 200:
+                return float(r.json().get("price", fallback))
+        except Exception:
+            pass
     return fallback
 
 
