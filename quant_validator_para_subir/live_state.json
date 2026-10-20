@@ -1,0 +1,37 @@
+{
+    "active_trade": {
+        "entry_time": "2026-10-20 12:15:09",
+        "entry_price": 82317.97,
+        "units": 0.03037003949441416,
+        "stop_price": 81603.86957322965,
+        "tp_price": 83746.17085354072,
+        "stop_distance": 714.1004267703581,
+        "bars_held": 25,
+        "margin_usdt": 250.0,
+        "leverage": 10.0
+    },
+    "paper_balance_usdt": 748.0986203836763,
+    "last_processed_candle": "2026-10-20 21:30:00",
+    "total_trades": 1,
+    "trades_today_date": "2026-10-20",
+    "trades_today_count": 2,
+    "trade_history": [
+        {
+            "id": 1,
+            "symbol": "BTCUSDT",
+            "strategy": "Cruce de EMAs",
+            "entry_time": "2026-10-20 11:29:39",
+            "exit_time": "2026-10-20 12:13:49",
+            "entry_price": 82989.74,
+            "exit_price": 82358.56,
+            "units": 0.00301,
+            "pnl_usdt": -1.9,
+            "r_multiple": -1.04,
+            "exit_reason": "STOP_LOSS",
+            "status": "NEGATIVA (P\u00c9RDIDA)",
+            "explanation": "El movimiento perdi\u00f3 fuerza tras 3 velas y se dio vuelta hasta tocar el Stop Loss (-1.04R). Parte normal de la probabilidad estad\u00edstica.",
+            "improvement": "Mejora sugerida: El Stop Loss cumpli\u00f3 su funci\u00f3n de limitar el da\u00f1o a ~1R. Si se repite, reducir el Ratio Take Profit de 2.0 a 1.5 para asegurar ganancias antes.",
+            "verse": "El que es fiel en lo muy poco, tambi\u00e9n en lo m\u00e1s es fiel; y el que en lo muy poco es injusto, tambi\u00e9n en lo m\u00e1s es injusto. (Lucas 16:10)"
+        }
+    ]
+}
