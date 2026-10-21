@@ -6,15 +6,15 @@
         "stop_price": 81603.86957322965,
         "tp_price": 83746.17085354072,
         "stop_distance": 714.1004267703581,
-        "bars_held": 25,
+        "bars_held": 60,
         "margin_usdt": 250.0,
         "leverage": 10.0
     },
     "paper_balance_usdt": 748.0986203836763,
-    "last_processed_candle": "2026-10-20 21:30:00",
+    "last_processed_candle": "2026-10-21 06:30:00",
     "total_trades": 1,
-    "trades_today_date": "2026-10-20",
-    "trades_today_count": 2,
+    "trades_today_date": "2026-10-21",
+    "trades_today_count": 0,
     "trade_history": [
         {
             "id": 1,

@@ -178,6 +178,9 @@ class BinanceLiveTrader:
         3. Calcula la señal de la estrategia ganadora al cierre.
         4. Abre o gestiona la posición según corresponda.
         """
+        # Recargar estado en vivo desde disco (por si se cerró manualmente desde Telegram o desde la Web)
+        self.state = self._load_state()
+
         # Recargar configuración en caliente desde config_bot.json (incluyendo Apalancamiento)
         if os.path.exists(self.cfg_file):
             try:
@@ -244,6 +247,7 @@ class BinanceLiveTrader:
             exit_triggered = False
             exit_reason = ""
 
+            bars_held_now = int(active_trade.get("bars_held", 0))
             if current_price <= stop_price:
                 exit_triggered = True
                 exit_reason = "STOP_LOSS"
@@ -253,6 +257,12 @@ class BinanceLiveTrader:
             elif not same_candle and current_signal == 0:
                 exit_triggered = True
                 exit_reason = "CAMBIO_SENAL"
+            elif bars_held_now >= 20 and current_price > entry_price:
+                exit_triggered = True
+                exit_reason = "TOMA_GANANCIA_POR_TIEMPO"
+            elif bars_held_now >= 32:
+                exit_triggered = True
+                exit_reason = "CIERRE_MAX_TIEMPO"
 
             if exit_triggered:
                 self._log(f"[SALIDA] Cerrando posicion ({trade_lev:.0f}x): Motivo {exit_reason} al precio ${current_price:,.2f}")
@@ -408,3 +418,112 @@ class BinanceLiveTrader:
         self.state["last_processed_candle"] = last_candle_time
         self._save_state()
         self._log("=" * 60 + "\n")
+
+
+def close_active_trade_now(reason: str = "CIERRE_MANUAL_USUARIO") -> Optional[Dict[str, Any]]:
+    """
+    Cierra inmediatamente la operación activa en `live_state.json` al precio actual de mercado en Binance,
+    acredita la ganancia/pérdida en el saldo y guarda el registro completo en `trade_history`.
+    Puede invocarse desde Telegram (`/cerrar`) o desde la Web (`app.py`).
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    state_file = os.path.join(base_dir, "live_state.json")
+    cfg_file = os.path.join(base_dir, "config_bot.json")
+    log_file = os.path.join(base_dir, "bot_activity.log")
+
+    if not os.path.exists(state_file):
+        return None
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        return None
+
+    active_trade = state.get("active_trade")
+    if not active_trade:
+        return None
+
+    cfg = {}
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+    sym = active_trade.get("symbol", cfg.get("symbol", "BTCUSDT"))
+    entry_price = float(active_trade.get("entry_price", 0.0))
+    stop_price = float(active_trade.get("stop_price", 0.0))
+    units = float(active_trade.get("units", 0.0))
+    trade_lev = float(active_trade.get("leverage", cfg.get("leverage", 5.0)))
+    margin_used = float(active_trade.get("margin_usdt", (units * entry_price) / max(1.0, trade_lev)))
+
+    # Obtener precio en vivo de Binance
+    current_price = entry_price
+    for base_u in ("https://data-api.binance.vision", "https://api.binance.com"):
+        try:
+            r = requests.get(f"{base_u}/api/v3/ticker/price", params={"symbol": sym.upper()}, timeout=5)
+            if r.status_code == 200:
+                current_price = float(r.json().get("price", entry_price))
+                break
+        except Exception:
+            pass
+
+    pnl = (current_price - entry_price) * units
+    roe_pct = (pnl / margin_used) * 100.0 if margin_used > 0 else 0.0
+    stop_dist_orig = float(active_trade.get("stop_distance", max(1.0, abs(entry_price - stop_price))))
+    initial_risk = units * stop_dist_orig
+    r_mult = pnl / initial_risk if initial_risk > 0 else 0.0
+
+    if cfg.get("mode", "PAPER") == "PAPER":
+        state["paper_balance_usdt"] = float(state.get("paper_balance_usdt", 1000.0)) + margin_used + pnl
+
+    diag = diagnose_trade_outcome(
+        pnl=pnl,
+        r_multiple=r_mult,
+        exit_reason=reason,
+        bars_held=max(1, int(active_trade.get("bars_held", 1))),
+        strategy_type="trend",
+        adx_at_exit=25.0
+    )
+    verse = get_random_verse()
+
+    trade_record = {
+        "id": int(state.get("total_trades", 0)) + 1,
+        "symbol": sym,
+        "strategy": active_trade.get("strategy", "Cruce de EMAs"),
+        "leverage": f"{trade_lev:.0f}x",
+        "entry_time": active_trade.get("entry_time", "-"),
+        "exit_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "entry_price": round(entry_price, 4),
+        "exit_price": round(current_price, 4),
+        "units": round(units, 5),
+        "pnl_usdt": round(pnl, 2),
+        "roe_pct": round(roe_pct, 2),
+        "r_multiple": round(r_mult, 2),
+        "exit_reason": reason,
+        "status": diag["status"],
+        "explanation": diag["explanation"],
+        "improvement": diag["improvement"],
+        "verse": f"{verse['verse']} ({verse['reference']})"
+    }
+
+    if "trade_history" not in state:
+        state["trade_history"] = []
+    state["trade_history"].append(trade_record)
+    state["active_trade"] = None
+    state["total_trades"] = int(state.get("total_trades", 0)) + 1
+
+    with open(state_file, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=4)
+
+    try:
+        with open(log_file, "a", encoding="utf-8") as f_l:
+            f_l.write(
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [CIERRE MANUAL {trade_lev:.0f}x] "
+                f"Cerrada al precio ${current_price:,.2f} | PnL: ${pnl:+,.2f} USDT (ROE: {roe_pct:+.2f}%)\n"
+            )
+    except Exception:
+        pass
+
+    return trade_record

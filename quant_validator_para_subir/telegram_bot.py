@@ -17,6 +17,7 @@ import time
 import requests
 
 from biblical_wisdom import get_random_verse
+from live_trader import close_active_trade_now
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config_bot.json")
@@ -63,8 +64,9 @@ def send_telegram_message(token: str, chat_id: str, text: str, with_keyboard: bo
     if with_keyboard:
         payload["reply_markup"] = {
             "keyboard": [
-                [{"text": "📈 /operacion"}, {"text": "📊 /estado"}],
-                [{"text": "📋 /historial"}, {"text": "📖 /versiculo"}]
+                [{"text": "📈 /operacion"}, {"text": "💰 /cerrar"}],
+                [{"text": "📊 /estado"}, {"text": "📋 /historial"}],
+                [{"text": "📖 /versiculo"}]
             ],
             "resize_keyboard": True
         }
@@ -132,7 +134,7 @@ def format_active_operation_block(active: dict, cfg: dict, paper_bal: float) -> 
         status_banner = "🔴 *VAS EN NEGATIVO (EN PÉRDIDA FLOTANTE)* 🔴"
         amount_line = f"📉 *Pérdida Actual:* `{pnl_usdt:+,.2f} USDT` (`ARS$ {pnl_ars:+,.0f}`)"
 
-    equity_vivo = paper_bal + pnl_usdt
+    equity_vivo = paper_bal + margin_u + pnl_usdt
 
     return (
         f"{status_banner}\n"
@@ -149,6 +151,7 @@ def format_active_operation_block(active: dict, cfg: dict, paper_bal: float) -> 
         f"• *🛑 Stop Loss:* `${stop_p:,.2f}` (colchón `{dist_to_sl_pct:.2f}%` | riesgo `-{risk_usdt:,.2f} USDT`)\n\n"
         f"🗺️ *Recorrido SL ➔ Entrada (⚡) ➔ TP:*\n"
         f"`{progress_bar}`\n\n"
+        f"💡 _Tocá el botón_ 💰 */cerrar* _si querés cerrarla ahora mismo al precio actual._\n\n"
     )
 
 
@@ -277,7 +280,34 @@ def run_telegram_listener():
                         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                             json.dump(cfg, f, indent=4)
 
-                    if "/operacion" in text or "operacion" in text or "operación" in text:
+                    if "/cerrar" in text or text == "cerrar" or "cerrar" in text:
+                        closed_rec = close_active_trade_now(reason="CIERRE_MANUAL_TELEGRAM")
+                        if closed_rec is None:
+                            send_telegram_message(
+                                token, chat_id,
+                                "⚪ *No hay ninguna operación abierta en este momento para cerrar.*\n"
+                                "El bot abrirá la siguiente cuando detecte señal de entrada."
+                            )
+                        else:
+                            pnl_u = float(closed_rec.get("pnl_usdt", 0.0))
+                            pnl_ars = pnl_u * fetch_usdt_ars()
+                            roe_t = float(closed_rec.get("roe_pct", 0.0))
+                            new_bal = float(load_json(STATE_FILE).get("paper_balance_usdt", 1000.0))
+                            icon = "🟢 POSITIVA (GANANCIA ASEGURADA)" if pnl_u >= 0 else "🔴 NEGATIVA (CERRADA)"
+                            close_msg = (
+                                f"💰 *OPERACIÓN CERRADA MANUALMENTE POR VOS*\n"
+                                f"━━━━━━━━━━━━━━━━━━━━\n"
+                                f"• *Resultado:* {icon}\n"
+                                f"• *Monto Neto:* `{pnl_u:+,.2f} USDT` (`ARS$ {pnl_ars:+,.0f}`)\n"
+                                f"• *ROE Apalancado ({closed_rec.get('leverage', '5x')}):* `{roe_t:+.2f}%` (`{closed_rec.get('r_multiple', 0):+.2f}R`)\n"
+                                f"• *Entrada ➔ Salida:* `${closed_rec.get('entry_price', 0):,.2f}` ➔ `${closed_rec.get('exit_price', 0):,.2f}`\n"
+                                f"• *Nuevo Saldo Disponible:* `${new_bal:,.2f} USDT`\n\n"
+                                f"📖 _{closed_rec.get('verse', '')}_"
+                            )
+                            notified_trades_count = len(load_json(STATE_FILE).get("trade_history", []))
+                            last_active_entry_time = None
+                            send_telegram_message(token, chat_id, close_msg)
+                    elif "/operacion" in text or "operacion" in text or "operación" in text:
                         send_telegram_message(token, chat_id, build_operation_message())
                     elif "/estado" in text or "estado" in text:
                         send_telegram_message(token, chat_id, build_status_message())
@@ -294,6 +324,7 @@ def run_telegram_listener():
                             "🙏 *Bendiciones. Bienvenido a tu Bot Cuantitativo Móvil.*\n\n"
                             "Tocá cualquiera de los botones de abajo en tu celular para consultar:\n"
                             "• 📈 */operacion* — Ver cómo va la operación actual (si vas *POSITIVO* o *NEGATIVO* y con cuánto en USDT, ARS y ROE%)\n"
+                            "• 💰 */cerrar* — Cerrar la operación abierta ahora mismo y tomar la ganancia/pérdida al precio actual\n"
                             "• 📊 */estado* — Ver resumen general del bot + operación abierta\n"
                             "• 📋 */historial* — Ver operaciones cerradas, ganancias y diagnóstico\n"
                             "• 📖 */versiculo* — Recibir un versículo bíblico cristiano"

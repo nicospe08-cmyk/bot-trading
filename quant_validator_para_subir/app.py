@@ -45,6 +45,7 @@ from indicators import (
     calc_bollinger,
     calc_ema,
 )
+from live_trader import close_active_trade_now
 from news_filter import evaluate_news_filter
 from run_bot import start_embedded_bot_if_needed
 from strategies import get_all_strategies
@@ -1036,6 +1037,18 @@ if "last_results" in st.session_state:
                 f"</div></div>"
             )
             st.markdown(live_trade_html, unsafe_allow_html=True)
+            if st.button(
+                f"💰 Cerrar Operación Ahora al Precio Actual (${disp_price:,.2f}) y Asegurar Resultado ({pnl_sign}${live_pnl_usdt:,.2f} USDT / ARS$ {pnl_sign}{live_pnl_ars:,.0f})",
+                key="btn_close_chart_trade",
+                use_container_width=True
+            ):
+                closed_rec = close_active_trade_now(reason="CIERRE_MANUAL_WEB")
+                if closed_rec:
+                    st.success(
+                        f"✅ Operación cerrada con éxito a ${closed_rec['exit_price']:,.2f} | "
+                        f"Resultado: {closed_rec['pnl_usdt']:+,.2f} USDT (ROE: {closed_rec['roe_pct']:+.2f}%)"
+                    )
+                    st.rerun()
 
         c_opt1, c_opt2, c_opt3 = st.columns([1.2, 1.2, 2.6])
         with c_opt1:
@@ -1787,6 +1800,18 @@ if "last_results" in st.session_state:
                 f"📌 **Trade Activo en Curso ({at_lev:.0f}x Apalancado):** Entrada: `${at['entry_price']:,.2f}` ({at['entry_time']}) | "
                 f"Unidades: `{at['units']:.5f}` | Stop Loss: `${at['stop_price']:,.2f}` | Take Profit: `${at['tp_price']:,.2f}`"
             )
+            if st.button(
+                "💰 Cerrar Operación Ahora al Precio Actual y Tomar Ganancia/Pérdida",
+                key="btn_close_bot_tab",
+                use_container_width=True
+            ):
+                closed_rec = close_active_trade_now(reason="CIERRE_MANUAL_WEB")
+                if closed_rec:
+                    st.success(
+                        f"✅ Operación cerrada manualmente a ${closed_rec['exit_price']:,.2f} | "
+                        f"Resultado: {closed_rec['pnl_usdt']:+,.2f} USDT (ROE: {closed_rec['roe_pct']:+.2f}%)"
+                    )
+                    st.rerun()
 
         # Historial de Operaciones Ejecutadas por el Bot Automático 24/7
         st.markdown("---")
