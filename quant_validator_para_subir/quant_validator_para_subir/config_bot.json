@@ -1,0 +1,16 @@
+{
+    "mode": "REAL",
+    "symbol": "BTCUSDT",
+    "timeframe": "15m",
+    "session_mode": "NUEVA_YORK",
+    "leverage": 10.0,
+    "max_trades_per_day": 2,
+    "risk_pct": 0.01,
+    "stop_atr_mult": 2.0,
+    "rr_ratio": 2.0,
+    "max_position_usdt": 10.0,
+    "binance_api_key": "kXYWnI3jtRUPobWnivEliPOkpcj6Y18hK0XQxFwWShMBJBkbGpAh0qqXJgrROlit",
+    "binance_api_secret": "ThKaOtdhZwxawVdAh1U0ARZG1X7Qal4KtdddZbsnBIA8IuCrggS5BWIIzaGc7e56",
+    "telegram_bot_token": "8902461186:AAEYRALaV_cs58YiaTagMFUJkNsKaPQkuLQ",
+    "telegram_chat_id": "6353113792"
+}
