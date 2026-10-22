@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import time
+import urllib.parse
 from typing import Any, Dict, Optional
 import pandas as pd
 import requests
@@ -199,7 +200,7 @@ class BinanceLiveTrader:
         return params
 
     def get_account_balance(self, asset: str = "USDT") -> float:
-        """Consulta el saldo libre en Binance (o saldo virtual en modo PAPER)."""
+        """Consulta el saldo libre en Binance (o saldo virtual en modo PAPER), incluyendo Earn Flexible."""
         if self.mode == "PAPER":
             return float(self.state.get("paper_balance_usdt", 1000.0))
 
@@ -211,18 +212,32 @@ class BinanceLiveTrader:
             resp = requests.get(endpoint, headers=headers, params=params, timeout=10)
             if resp.status_code == 200:
                 balances = resp.json().get("balances", [])
+                spot_bal = 0.0
+                ld_bal = 0.0
                 for b in balances:
-                    if b["asset"] == asset:
-                        bal = float(b["free"])
-                        # En modo REAL, sincronizar el balance con el estado local
-                        if asset == "USDT":
-                            self.state["real_balance_usdt"] = bal
-                        return bal
+                    a = b["asset"]
+                    if a == asset:
+                        spot_bal = float(b.get("free", 0.0))
+                    elif a == f"LD{asset}":
+                        ld_bal = float(b.get("free", 0.0))
+
+                total_bal = spot_bal + ld_bal
+
+                # Si el saldo Spot es menor al mínimo de $10 USDT pero hay en Earn Flexible, auto-rescatar a Spot
+                if asset == "USDT" and spot_bal < 10.0 and total_bal >= 10.0:
+                    self._log(f"[AUTO-RESCATE] Spot tiene ${spot_bal:.2f} USDT y Earn tiene ${ld_bal:.2f} USDT. Rescatando fondos a Spot...")
+                    auto_redeem_simple_earn(self.api_key, self.api_secret, amount=min(total_bal, 11.0))
+                    spot_bal = total_bal
+
+                if asset == "USDT":
+                    self.state["real_balance_usdt"] = total_bal
+
+                return total_bal if asset == "USDT" else spot_bal
             else:
                 print(f"[ERROR] Error al consultar saldo: {resp.text}")
         except Exception as e:
             print(f"[ERROR] Excepción de red: {e}")
-        return 0.0
+        return float(self.state.get("real_balance_usdt", 0.0))
 
     def place_market_order(self, side: str, quantity: float) -> Optional[Dict[str, Any]]:
         """
@@ -643,31 +658,99 @@ def close_active_trade_now(reason: str = "CIERRE_MANUAL_USUARIO") -> Optional[Di
     return trade_record
 
 
-def fetch_real_binance_balances_dict(api_key: str, api_secret: str) -> Dict[str, float]:
-    """Consulta todos los saldos reales de Binance usando HMAC-SHA256."""
+_REAL_BALANCES_CACHE: Dict[str, Any] = {
+    "timestamp": 0.0,
+    "key": "",
+    "data": {}
+}
+
+
+def auto_redeem_simple_earn(api_key: str, api_secret: str, amount: float = 10.5) -> bool:
+    """Rescata automáticamente USDT de Simple Earn Flexible a la billetera Spot para operar."""
+    if not api_key or not api_secret:
+        return False
+    endpoint = "https://api.binance.com/sapi/v1/simple-earn/flexible/redeem"
+    ts = int(time.time() * 1000)
+    params = {
+        "productId": "USDT001",
+        "amount": round(amount, 2),
+        "type": "FAST",
+        "timestamp": ts
+    }
+    query = urllib.parse.urlencode(params)
+    sig = hmac.new(api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+    headers = {"X-MBX-APIKEY": api_key}
+    try:
+        r = requests.post(f"{endpoint}?{query}&signature={sig}", headers=headers, timeout=5)
+        if r.status_code == 200 and r.json().get("success"):
+            print(f"[BINANCE EARN] Auto-rescate exitoso de {amount} USDT a Spot.")
+            return True
+    except Exception as e:
+        print(f"[BINANCE EARN ERROR] {e}")
+    return False
+
+
+def fetch_real_binance_balances_dict(api_key: str, api_secret: str, force_refresh: bool = False) -> Dict[str, float]:
+    """
+    Consulta saldos reales de Binance usando HMAC-SHA256 con caché inteligente de 8 segundos.
+    Suma automáticamente USDT Spot + LDUSDT (Simple Earn Flexible) para que el saldo
+    nunca muestre $0.00 USDT si los fondos están generando rendimiento diario en Binance.
+    """
+    global _REAL_BALANCES_CACHE
+    now = time.time()
+    if not force_refresh and (now - _REAL_BALANCES_CACHE["timestamp"] < 8.0) and _REAL_BALANCES_CACHE["key"] == api_key:
+        return dict(_REAL_BALANCES_CACHE["data"])
+
     if not api_key or not api_secret:
         return {}
+
     endpoint = "https://api.binance.com/api/v3/account"
-    params = {"timestamp": int(time.time() * 1000)}
-    query = f"timestamp={params['timestamp']}"
+    ts = int(time.time() * 1000)
+    params = {"timestamp": ts}
+    query = f"timestamp={ts}"
     sig = hmac.new(api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
     params["signature"] = sig
     headers = {"X-MBX-APIKEY": api_key}
+
     try:
         r = requests.get(endpoint, headers=headers, params=params, timeout=5)
         if r.status_code == 200:
-            res = {}
+            res: Dict[str, float] = {}
+            raw_spot_usdt = 0.0
+            raw_ld_usdt = 0.0
+
             for b in r.json().get("balances", []):
                 val = float(b.get("free", 0.0))
                 if val > 0:
-                    res[b["asset"]] = val
-            return res
-    except Exception:
-        pass
+                    asset = b["asset"]
+                    res[asset] = val
+                    if asset == "USDT":
+                        raw_spot_usdt = val
+                    elif asset == "LDUSDT":
+                        raw_ld_usdt = val
+
+            total_usdt = raw_spot_usdt + raw_ld_usdt
+            if total_usdt > 0:
+                res["USDT"] = total_usdt
+                res["USDT_SPOT"] = raw_spot_usdt
+                res["USDT_EARN"] = raw_ld_usdt
+
+            _REAL_BALANCES_CACHE = {
+                "timestamp": now,
+                "key": api_key,
+                "data": res
+            }
+            return dict(res)
+    except Exception as e:
+        print(f"[BINANCE BALANCE API ERROR] {e}")
+
+    # En caso de error de red o timeout, retornar la caché previa si existe
+    if _REAL_BALANCES_CACHE["data"]:
+        return dict(_REAL_BALANCES_CACHE["data"])
     return {}
 
 
 def fetch_real_binance_balance(api_key: str, api_secret: str, asset: str = "USDT") -> float:
-    """Consulta rápida del saldo real disponible de Binance usando HMAC-SHA256."""
+    """Consulta rápida del saldo real disponible de Binance (Spot + Flexible Earn)."""
     b_dict = fetch_real_binance_balances_dict(api_key, api_secret)
     return b_dict.get(asset, 0.0)

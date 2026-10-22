@@ -2,7 +2,7 @@
     "mode": "REAL",
     "symbol": "BTCUSDT",
     "timeframe": "15m",
-    "session_mode": "NUEVA_YORK",
+    "session_mode": "TODAS_24_7",
     "leverage": 10.0,
     "max_trades_per_day": 2,
     "risk_pct": 0.01,

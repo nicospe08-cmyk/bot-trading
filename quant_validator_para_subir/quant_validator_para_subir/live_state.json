@@ -1,9 +1,9 @@
 {
     "active_trade": null,
     "paper_balance_usdt": 11.41,
-    "last_processed_candle": "2026-10-22 00:00:00",
+    "last_processed_candle": "2026-10-22 06:45:00",
     "total_trades": 4,
-    "trades_today_date": "2026-10-21",
+    "trades_today_date": "2026-10-22",
     "trades_today_count": 0,
     "trade_history": [
         {
@@ -85,5 +85,5 @@
             "mode": "PAPER"
         }
     ],
-    "real_balance_usdt": 11.41
+    "real_balance_usdt": 11.0
 }

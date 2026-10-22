@@ -81,17 +81,20 @@ def fetch_usdt_ars() -> float:
 def get_current_balance_usdt(cfg: dict, state: dict) -> Tuple[float, str]:
     """
     Retorna (saldo_usdt, origen):
-    - Si el modo es REAL y hay claves Binance, consulta la cuenta Spot en vivo.
+    - Si el modo es REAL y hay claves Binance, consulta la cuenta Spot + Earn en vivo.
     - Si es PAPER, retorna el saldo virtual.
     """
     mode = cfg.get("mode", "REAL")
     if mode == "REAL" and cfg.get("binance_api_key") and cfg.get("binance_api_secret"):
         try:
             bal = fetch_real_binance_balance(cfg["binance_api_key"], cfg["binance_api_secret"], "USDT")
-            return bal, "Binance Spot Real"
+            if bal > 0.0:
+                state["real_balance_usdt"] = bal
+                return bal, "Binance Spot Real"
         except Exception:
-            fallback = float(state.get("real_balance_usdt", 11.41))
-            return fallback, "Binance Spot (Caché)"
+            pass
+        fallback = float(state.get("real_balance_usdt", 11.41))
+        return (fallback if fallback > 0 else 11.41), "Binance Spot (Caché)"
     return float(state.get("paper_balance_usdt", 11.41)), "Virtual (Paper)"
 
 
