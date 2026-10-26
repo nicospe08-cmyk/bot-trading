@@ -71,7 +71,7 @@ def load_bot_config() -> dict:
     return default_cfg
 
 
-def select_best_validated_strategy(symbol: str, timeframe: str, risk_pct: float, stop_atr: float, rr_ratio: float):
+def select_best_validated_strategy(symbol: str, timeframe: str, risk_pct: float, stop_atr: float, rr_ratio: float, allow_short: bool = True):
     """
     Descarga datos frescos y ejecuta el validador cuantitativo para elegir la mejor estrategia.
     Si el mercado estuvo lateral en el tramo corto y ninguna pasa el filtro OOS estricto,
@@ -88,7 +88,7 @@ def select_best_validated_strategy(symbol: str, timeframe: str, risk_pct: float,
         rr_ratio=rr_ratio,
         commission_pct=0.0005,
         slippage_pct=0.0002,
-        allow_short=False,
+        allow_short=allow_short,
         min_trades=3
     )
     all_strats = get_all_strategies()
@@ -98,21 +98,36 @@ def select_best_validated_strategy(symbol: str, timeframe: str, risk_pct: float,
     if best_strict is not None:
         return best_strict, True
 
-    # Selección adaptativa: priorizar estrategias con señal activa (+1) y mejor esperanza combinada
+    # Selección adaptativa: priorizar estrategias con señal activa (+1 o -1 si allow_short) y mejor esperanza combinada
     scored_candidates = []
     for ev in evaluations:
         strat_inst = next(s for s in all_strats if s.name == ev.strategy_name)
-        sig_series = strat_inst.generate_signals(df, ev.best_params, allow_short=False)
+        sig_series = strat_inst.generate_signals(df, ev.best_params, allow_short=allow_short)
         last_sig = int(sig_series.iloc[-1])
+        has_active_signal = (last_sig in (1, -1)) if allow_short else (last_sig == 1)
         combined_exp = (ev.train_metrics.expectancy_r * 0.6) + (ev.test_metrics.expectancy_r * 0.4)
-        scored_candidates.append((last_sig == 1, combined_exp, ev))
+        scored_candidates.append((has_active_signal, combined_exp, ev))
 
     # Ordenar primero por tener señal activa hoy (True > False) y luego por mayor esperanza combinada
     scored_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
     return scored_candidates[0][2], False
 
 
+def keep_windows_awake():
+    """Evita que Windows entre en suspensión o ahorro de energía mientras el bot corre 24/7."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ES_CONTINUOUS = 0x80000000
+            ES_SYSTEM_REQUIRED = 0x00000001
+            ES_AWAYMODE_REQUIRED = 0x00000040
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED)
+        except Exception:
+            pass
+
+
 def main():
+    keep_windows_awake()
     cfg = load_bot_config()
 
     # Permitir sobrescribir por variables de entorno si existen
@@ -130,6 +145,9 @@ def main():
     MAX_POSITION_USDT = float(os.environ.get("TRADING_MAX_USDT", cfg["max_position_usdt"]))
     LEVERAGE = float(os.environ.get("TRADING_LEVERAGE", cfg.get("leverage", 5.0)))
 
+    MARKET_TYPE = str(os.environ.get("TRADING_MARKET_TYPE", cfg.get("market_type", "FUTURES"))).upper()
+    ALLOW_SHORT = bool(cfg.get("allow_short", True if MARKET_TYPE == "FUTURES" else False))
+
     trader = BinanceLiveTrader(
         api_key=BINANCE_API_KEY,
         api_secret=BINANCE_API_SECRET,
@@ -141,7 +159,11 @@ def main():
         rr_ratio=RR_RATIO,
         max_position_usdt=MAX_POSITION_USDT,
         max_trades_per_day=MAX_TRADES_DAY,
-        leverage=LEVERAGE
+        leverage=LEVERAGE,
+        session_mode=cfg.get("session_mode", "TODAS_24_7"),
+        market_type=MARKET_TYPE,
+        min_adx_filter=float(cfg.get("min_adx_filter", 22.0)),
+        allow_short=ALLOW_SHORT
     )
 
     v = get_random_verse()
@@ -151,7 +173,7 @@ def main():
     trader._log("   BOT DE TRADING AUTOMATICO 24/7 INICIADO (AUTONOMO)")
     trader._log(f"   [PALABRA DE SABIDURIA] {verse_ascii}")
     trader._log("=" * 70)
-    trader._log(f" - Modo:                 {MODE} ({'DINERO VIRTUAL' if MODE == 'PAPER' else 'BINANCE REAL'})")
+    trader._log(f" - Modo:                 {MODE} ({'DINERO VIRTUAL' if MODE == 'PAPER' else f'BINANCE REAL ({MARKET_TYPE})'})")
     trader._log(f" - Par:                  {SYMBOL} ({TIMEFRAME})")
     trader._log(f" - Apalancamiento:       {LEVERAGE:.0f}x")
     trader._log(f" - Maximo Trades / Dia:  {MAX_TRADES_DAY} operaciones por dia")
@@ -174,19 +196,30 @@ def main():
     try:
         while True:
             now = time.time()
+            keep_windows_awake()
             update_heartbeat(source="run_bot")
 
-            # Recargar apalancamiento y límites dinámicos por si se actualizaron desde la Web
+            # Recargar configuración dinámica y estado por si se actualizó desde Telegram o la Web
             latest_cfg = load_bot_config()
+            trader.state = trader._load_state()
+            trader.session_mode = str(latest_cfg.get("session_mode", trader.session_mode))
+            trader.mode = str(latest_cfg.get("mode", trader.mode))
+            trader.market_type = str(latest_cfg.get("market_type", getattr(trader, "market_type", "FUTURES"))).upper()
+            trader.allow_short = bool(latest_cfg.get("allow_short", True if trader.market_type == "FUTURES" else False))
+            trader.max_position_usdt = float(latest_cfg.get("max_position_usdt", trader.max_position_usdt))
             trader.leverage = float(latest_cfg.get("leverage", trader.leverage))
+            trader.rr_ratio = float(latest_cfg.get("rr_ratio", trader.rr_ratio))
+            trader.min_adx_filter = float(latest_cfg.get("min_adx_filter", getattr(trader, "min_adx_filter", 22.0)))
             trader.max_trades_per_day = int(latest_cfg.get("max_trades_per_day", trader.max_trades_per_day))
 
             # Re-validar cada 15 min si no hay operación abierta (para detectar nuevas señales activas) o cada 6h si hay trade en curso
             reval_wait = VALIDATION_INTERVAL_SECONDS if trader.state.get("active_trade") is not None else 900
             if (now - last_validation_time) > reval_wait:
                 try:
-                    trader._log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Ejecutando validacion cuantitativa de estrategias...")
-                    best_eval, is_strict = select_best_validated_strategy(SYMBOL, TIMEFRAME, RISK_PCT, STOP_ATR_MULT, RR_RATIO)
+                    trader._log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Ejecutando validacion cuantitativa de estrategias (Permitir Cortos: {trader.allow_short})...")
+                    best_eval, is_strict = select_best_validated_strategy(
+                        SYMBOL, TIMEFRAME, RISK_PCT, STOP_ATR_MULT, RR_RATIO, allow_short=trader.allow_short
+                    )
                     last_validation_time = now
 
                     if best_eval is not None:

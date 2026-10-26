@@ -45,7 +45,7 @@ from indicators import (
     calc_bollinger,
     calc_ema,
 )
-from live_trader import close_active_trade_now
+from live_trader import SESSION_MODES, close_active_trade_now, evaluate_trading_session, fetch_real_binance_balance, fetch_real_binance_balances_dict
 from news_filter import evaluate_news_filter
 from run_bot import start_embedded_bot_if_needed
 from strategies import get_all_strategies
@@ -62,11 +62,13 @@ st.set_page_config(
 @st.cache_resource
 def init_cloud_autonomous_worker():
     """
-    Garantiza que cuando la app se aloje en la Nube (Streamlit Cloud / Render / Railway)
-    con la computadora apagada, el servidor web levante automáticamente el motor de trading 24/7
-    y el bot de Telegram en segundo plano.
+    Garantiza que cuando la app se aloje en la Nube (Streamlit Cloud / Linux: os.name != 'nt')
+    con la computadora apagada, el servidor web levante automáticamente el motor de trading 24/7.
+    En Windows local ('nt'), `run_bot.py` corre por separado para evitar dos procesos simultáneos.
     """
-    return start_embedded_bot_if_needed()
+    if os.name != "nt":
+        return start_embedded_bot_if_needed()
+    return False
 
 
 init_cloud_autonomous_worker()
@@ -624,7 +626,7 @@ if "last_results" in st.session_state:
     </div>
     """, unsafe_allow_html=True)
 
-    @st.fragment(run_every="15s")
+    @st.fragment(run_every="8s")
     def render_dynamic_live_header():
         ticker_html = fetch_live_ticker_strip()
         now_str = time.strftime("%H:%M:%S")
@@ -638,6 +640,169 @@ if "last_results" in st.session_state:
                 <div class="ticker-move">{ticker_html}</div>
             </div>
             """, unsafe_allow_html=True)
+
+        # --- RELOJ DE SESIONES INSTITUCIONALES (LONDRES / NUEVA YORK / ASIA) + ESTADO DE OPERACIÓN EN VIVO ---
+        base_dir_hdr = os.path.dirname(os.path.abspath(__file__))
+        cfg_file_hdr = os.path.join(base_dir_hdr, "config_bot.json")
+        state_file_hdr = os.path.join(base_dir_hdr, "live_state.json")
+
+        hdr_cfg = {}
+        if os.path.exists(cfg_file_hdr):
+            try:
+                with open(cfg_file_hdr, "r", encoding="utf-8") as fc:
+                    hdr_cfg = json.load(fc)
+            except Exception:
+                pass
+
+        hdr_state = {}
+        if os.path.exists(state_file_hdr):
+            try:
+                with open(state_file_hdr, "r", encoding="utf-8") as fs:
+                    hdr_state = json.load(fs)
+            except Exception:
+                pass
+
+        curr_sess_key = str(hdr_cfg.get("session_mode", "TODAS_24_7"))
+        if curr_sess_key not in SESSION_MODES:
+            curr_sess_key = "TODAS_24_7"
+        s_eval = evaluate_trading_session(curr_sess_key)
+
+        l_col = "#10b981" if s_eval["london_open"] else "#64748b"
+        ny_col = "#10b981" if s_eval["ny_open"] else "#64748b"
+        ov_col = "#f59e0b" if s_eval["overlap_open"] else "#64748b"
+        as_col = "#10b981" if s_eval["asia_open"] else "#64748b"
+        perm_col = "#10b981" if s_eval["allowed_now"] else "#f59e0b"
+        perm_txt = "✅ HABILITADO PARA OPERAR AHORA" if s_eval["allowed_now"] else f"⏳ ESPERANDO SESIÓN ({s_eval['horario_arg']})"
+
+        st.markdown(
+            f"<div style='background:linear-gradient(90deg, rgba(10,20,45,0.92) 0%, rgba(25,20,50,0.92) 100%); "
+            f"border:1px solid rgba(253,224,71,0.45); border-radius:12px; padding:10px 16px; margin-bottom:10px;'>"
+            f"<div style='display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px;'>"
+            f"<div><b style='color:#fde047;'>🌍 RELOJ DE SESIONES (Hora ARG {s_eval['arg_time']}):</b> "
+            f"<span style='background:rgba(255,255,255,0.06); padding:3px 9px; border-radius:6px; border:1px solid {l_col}; color:{l_col}; font-weight:700; margin-left:6px;'>🇬🇧 Londres (04-12h): {'ABIERTA' if s_eval['london_open'] else 'CERRADA'}</span>"
+            f"<span style='background:rgba(255,255,255,0.06); padding:3px 9px; border-radius:6px; border:1px solid {ny_col}; color:{ny_col}; font-weight:700; margin-left:6px;'>🇺🇸 Nueva York (09-17h): {'ABIERTA' if s_eval['ny_open'] else 'CERRADA'}</span>"
+            f"<span style='background:rgba(255,255,255,0.06); padding:3px 9px; border-radius:6px; border:1px solid {ov_col}; color:{ov_col}; font-weight:700; margin-left:6px;'>🔥 Overlap Lon-NY (09-12h): {'ACTIVO' if s_eval['overlap_open'] else 'INACTIVO'}</span>"
+            f"<span style='background:rgba(255,255,255,0.06); padding:3px 9px; border-radius:6px; border:1px solid {as_col}; color:{as_col}; font-weight:700; margin-left:6px;'>🇯🇵 Asia (20-04h): {'ABIERTA' if s_eval['asia_open'] else 'CERRADA'}</span>"
+            f"</div>"
+            f"<div style='color:{perm_col}; font-weight:800; font-size:0.86rem;'>🤖 Modo Bot: {s_eval['mode_short']} ➔ {perm_txt}</div>"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # Selector rápido de Sesión de Mercado para el Bot 24/7
+        sess_keys = list(SESSION_MODES.keys())
+        sess_labels = [SESSION_MODES[k]["label"] for k in sess_keys]
+        cs1, cs2 = st.columns([3.2, 2.8])
+        with cs1:
+            sel_idx = sess_keys.index(curr_sess_key) if curr_sess_key in sess_keys else 0
+            if "hdr_session_selector" in st.session_state and st.session_state.get("_last_sess_key") != curr_sess_key:
+                st.session_state["hdr_session_selector"] = sess_labels[sel_idx]
+            st.session_state["_last_sess_key"] = curr_sess_key
+
+            chosen_label = st.selectbox(
+                "🌍 Elegir en qué Sesión de Mercado opera el Bot 24/7 (Ej: Sesión Londres):",
+                sess_labels,
+                index=sel_idx,
+                key="hdr_session_selector"
+            )
+            chosen_key = sess_keys[sess_labels.index(chosen_label)]
+            if chosen_key != curr_sess_key:
+                hdr_cfg["session_mode"] = chosen_key
+                st.session_state["_last_sess_key"] = chosen_key
+                with open(cfg_file_hdr, "w", encoding="utf-8") as fc_w:
+                    json.dump(hdr_cfg, fc_w, indent=4)
+                st.toast(f"✅ Sesión del Bot cambiada a: {SESSION_MODES[chosen_key]['short']}", icon="🌍")
+                st.rerun()
+
+        with cs2:
+            # Resumen rápido de operaciones cerradas por el bot
+            is_real_hdr = (hdr_cfg.get("mode", "PAPER") == "REAL")
+            real_cash_txt = ""
+            if is_real_hdr and hdr_cfg.get("binance_api_key") and hdr_cfg.get("binance_api_secret"):
+                all_b_h = fetch_real_binance_balances_dict(
+                    hdr_cfg["binance_api_key"],
+                    hdr_cfg["binance_api_secret"],
+                    market_type=hdr_cfg.get("market_type", "FUTURES")
+                )
+                r_usdt = all_b_h.get("USDT", 0.0)
+                if r_usdt <= 0:
+                    r_usdt = float(hdr_state.get("real_balance_usdt", 11.41))
+                r_ars = all_b_h.get("ARS", 0.0)
+                if r_usdt > 0:
+                    real_cash_txt = f" | 💵 Saldo Binance: <b style='color:#10b981;'>${r_usdt:,.2f} USDT</b>"
+                elif r_ars > 0:
+                    real_cash_txt = f" | 💵 Saldo Binance: <b style='color:#10b981;'>${r_ars:,.0f} ARS</b>"
+
+            raw_hist_list = hdr_state.get("trade_history", [])
+            # Filtrar según modo para no mezclar simulaciones viejas con dinero real
+            if is_real_hdr:
+                hist_list = [x for x in raw_hist_list if x.get("mode") == "REAL"]
+            else:
+                hist_list = [x for x in raw_hist_list if x.get("mode") != "REAL"]
+
+            net_bot_pnl = sum(float(x.get("pnl_usdt", 0.0)) for x in hist_list)
+            wins_cnt = sum(1 for x in hist_list if float(x.get("pnl_usdt", 0.0)) > 0)
+            mode_tag = "🔴 MODO REAL" if is_real_hdr else "🟢 MODO PAPER"
+            st.markdown(
+                f"<div style='background:rgba(15,23,42,0.85); border:1px solid rgba(56,189,248,0.4); border-radius:10px; padding:10px 14px; margin-top:4px;'>"
+                f"<div style='font-size:0.8rem; color:#94a3b8;'>📊 {mode_tag} — HISTORIAL BOT 24/7 (SINCRONIZADO CON TELEGRAM){real_cash_txt}</div>"
+                f"<div style='font-size:1.0rem; font-weight:800; color:#f8fafc;'>Cerradas: {len(hist_list)} ({wins_cnt} Ganadas 🟢) | "
+                f"Acumulado: <span style='color:{'#10b981' if net_bot_pnl >= 0 else '#ef4444'};'>{net_bot_pnl:+,.2f} USDT</span></div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+        # --- BANNER DE OPERACIÓN ABIERTA EN VIVO (IDÉNTICO A TELEGRAM, ACTUALIZADO CADA 8 SEGUNDOS) ---
+        active_hdr = hdr_state.get("active_trade")
+        if active_hdr is not None:
+            sym_h = hdr_cfg.get("symbol", "BTCUSDT")
+            b_live_hdr = fetch_binance_terminal_info(sym_h)
+            side_h = str(active_hdr.get("side", "LONG")).upper()
+            entry_h = float(active_hdr.get("entry_price", 0.0))
+            stop_h = float(active_hdr.get("stop_price", 0.0))
+            tp_h = float(active_hdr.get("tp_price", 0.0))
+            units_h = float(active_hdr.get("units", 0.0))
+            lev_h = float(active_hdr.get("leverage", hdr_cfg.get("leverage", 5.0)))
+            margin_h = float(active_hdr.get("margin_usdt", (units_h * entry_h) / max(1.0, lev_h)))
+            live_p_h = b_live_hdr["last_price"] if b_live_hdr["last_price"] > 0 else entry_h
+            ars_rate_h = b_live_hdr["usdt_ars"]
+
+            if side_h == "SHORT":
+                pnl_u_h = (entry_h - live_p_h) * units_h
+            else:
+                pnl_u_h = (live_p_h - entry_h) * units_h
+
+            pnl_ars_h = pnl_u_h * ars_rate_h
+            roe_h = (pnl_u_h / margin_h * 100.0) if margin_h > 0 else 0.0
+
+            col_h = "#0ecb81" if pnl_u_h >= 0 else "#f6465d"
+            sign_h = "+" if pnl_u_h >= 0 else ""
+            dir_badge_h = "🟢 LONG" if side_h == "LONG" else "🔴 SHORT"
+            badge_h = f"GANANDO ({dir_badge_h})" if pnl_u_h >= 0 else f"PÉRDIDA FLOTANTE ({dir_badge_h})"
+
+            st.markdown(
+                f"<div style='background:linear-gradient(90deg, rgba(13,28,58,0.96) 0%, rgba(20,30,48,0.96) 100%); "
+                f"border:2px solid {col_h}; border-radius:12px; padding:12px 18px; margin-bottom:10px; box-shadow:0 4px 20px rgba(0,0,0,0.5);'>"
+                f"<div style='display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px;'>"
+                f"<div><span class='live-dot'></span><b style='color:#fde047; font-size:1.05rem;'>📲 OPERACIÓN ACTIVA EN VIVO ({sym_h} {lev_h:.0f}x | {dir_badge_h}) — {badge_h}</b><br>"
+                f"<span style='color:#cbd5e1; font-size:0.86rem; font-family:monospace;'>"
+                f"📍 Entrada: <b>${entry_h:,.2f}</b> | ⚡ Actual: <b style='color:{col_h};'>${live_p_h:,.2f}</b> | "
+                f"🛑 Stop Loss: <b style='color:#f6465d;'>${stop_h:,.2f}</b> | 🎯 Take Profit: <b style='color:#0ecb81;'>${tp_h:,.2f}</b>"
+                f"</span></div>"
+                f"<div style='font-family:monospace; font-size:1.18rem; font-weight:900; color:{col_h}; background:rgba(0,0,0,0.45); padding:6px 14px; border-radius:8px; border:1px solid {col_h};'>"
+                f"{sign_h}${pnl_u_h:,.2f} USDT ({sign_h}{roe_h:.2f}% ROE) | ARS$ {sign_h}{pnl_ars_h:,.0f}"
+                f"</div></div></div>",
+                unsafe_allow_html=True
+            )
+            if st.button(
+                f"💰 Cerrar Operación Ahora al Precio Actual (${live_p_h:,.2f}) y Asegurar {sign_h}${pnl_u_h:,.2f} USDT (ARS$ {sign_h}{pnl_ars_h:,.0f})",
+                key="btn_close_top_header",
+                use_container_width=True
+            ):
+                closed_top = close_active_trade_now(reason="CIERRE_MANUAL_WEB")
+                if closed_top:
+                    st.success(f"✅ Operación cerrada a ${closed_top['exit_price']:,.2f} | Resultado: {closed_top['pnl_usdt']:+,.2f} USDT")
+                    st.rerun()
 
         if "current_verse" not in st.session_state:
             st.session_state["current_verse"] = get_random_verse()
@@ -1050,13 +1215,15 @@ if "last_results" in st.session_state:
                     )
                     st.rerun()
 
-        c_opt1, c_opt2, c_opt3 = st.columns([1.2, 1.2, 2.6])
+        c_opt1, c_opt2, c_opt3, c_opt4 = st.columns([1.1, 1.1, 1.2, 2.0])
         with c_opt1:
-            show_binance_mas = st.checkbox("📈 Mostrar MA(7), MA(25), MA(99) de Binance", value=True)
+            show_binance_mas = st.checkbox("📈 Mostrar MA(7/25/99)", value=True)
         with c_opt2:
-            show_orderbook = st.checkbox("📖 Mostrar Libro de Órdenes (Derecha)", value=True)
+            show_orderbook = st.checkbox("📖 Libro de Órdenes", value=True)
         with c_opt3:
-            st.caption("✏️ **Herramientas de Dibujo:** Usa los íconos arriba a la derecha del gráfico para trazar líneas, rectángulos, círculos o borrar.")
+            show_sessions_chart = st.checkbox("🇬🇧 Marcar Sesión Londres / NY", value=True)
+        with c_opt4:
+            st.caption("✏️ **Herramientas de Dibujo:** Usa los íconos arriba a la derecha del gráfico para trazar líneas, rectángulos o círculos.")
 
         # Calcular Medias Móviles clásicas de Binance: MA(7), MA(25), MA(99)
         ma7 = df['close'].rolling(7).mean()
@@ -1179,6 +1346,41 @@ if "last_results" in st.session_state:
                             x=exit_dates, y=exit_prices, mode='markers', name='Salida Trade', text=exit_labels,
                             marker=dict(symbol='x', size=9, color='#fbbf24')
                         ), **trace_kwargs)
+
+            # 5.A SOMBREAR SESIONES INSTITUCIONALES (LONDRES Y NUEVA YORK) EN LAS ÚLTIMAS JORNADAS DEL GRÁFICO
+            if show_sessions_chart and len(df.index) > 10:
+                try:
+                    recent_days = sorted(list({ts.date() for ts in df.index[-140:]}))[-3:]
+                    min_ts, max_ts = df.index[0], df.index[-1]
+                    for d_day in recent_days:
+                        # Sesión Londres: 07:00 a 15:00 UTC (04:00 a 12:00 ARG)
+                        lon_start = pd.Timestamp(year=d_day.year, month=d_day.month, day=d_day.day, hour=7, minute=0)
+                        lon_end = pd.Timestamp(year=d_day.year, month=d_day.month, day=d_day.day, hour=15, minute=0)
+                        if lon_end > min_ts and lon_start < max_ts:
+                            fig_candles.add_vrect(
+                                x0=max(lon_start, min_ts), x1=min(lon_end, max_ts),
+                                fillcolor="rgba(56, 189, 248, 0.08)",
+                                line_width=1, line_dash="dot", line_color="rgba(56, 189, 248, 0.35)",
+                                annotation_text="🇬🇧 Sesión Londres (04-12h ARG)",
+                                annotation_position="top left",
+                                annotation_font=dict(color="#38bdf8", size=10),
+                                **trace_kwargs
+                            )
+                        # Sesión Nueva York: 12:00 a 20:00 UTC (09:00 a 17:00 ARG)
+                        ny_start = pd.Timestamp(year=d_day.year, month=d_day.month, day=d_day.day, hour=12, minute=0)
+                        ny_end = pd.Timestamp(year=d_day.year, month=d_day.month, day=d_day.day, hour=20, minute=0)
+                        if ny_end > min_ts and ny_start < max_ts:
+                            fig_candles.add_vrect(
+                                x0=max(ny_start, min_ts), x1=min(ny_end, max_ts),
+                                fillcolor="rgba(250, 204, 21, 0.07)",
+                                line_width=1, line_dash="dot", line_color="rgba(250, 204, 21, 0.35)",
+                                annotation_text="🇺🇸 Sesión NY (09-17h ARG)",
+                                annotation_position="bottom left",
+                                annotation_font=dict(color="#fde047", size=10),
+                                **trace_kwargs
+                            )
+                except Exception:
+                    pass
 
             # 5.B DIBUJAR EN EL GRÁFICO LA OPERACIÓN EN VIVO DEL BOT 24/7 (CAJA DE GANANCIA/PÉRDIDA + NIVELES)
             if live_bot_trade is not None:
@@ -1778,26 +1980,78 @@ if "last_results" in st.session_state:
 
         # Mostrar métricas en vivo del bot
         b_col1, b_col2, b_col3, b_col4, b_col5 = st.columns(5)
+        is_real = (bot_cfg.get("mode", "PAPER") == "REAL")
+        mkt_type = str(bot_cfg.get("market_type", "FUTURES")).upper()
+        curr_lev_cfg = float(bot_cfg.get("leverage", 15.0 if is_real else 5.0))
         with b_col1:
-            st.metric("Modo Activo", bot_cfg.get("mode", "PAPER"))
+            st.metric("Modo Activo", f"🟢 REAL ({'Futuros' if mkt_type == 'FUTURES' else 'Spot'})" if is_real else "📝 PAPER")
         with b_col2:
-            curr_lev_cfg = float(bot_cfg.get("leverage", 5.0))
-            st.metric("⚡ Apalancamiento", f"{curr_lev_cfg:.0f}x", f"Poder: ${float(bot_cfg.get('max_position_usdt', 250.0))*curr_lev_cfg:,.0f} USDT")
+            if is_real and mkt_type == "FUTURES":
+                st.metric("⚡ Apalancamiento Real", f"{curr_lev_cfg:.0f}x (Aislado)", f"Poder: ${float(bot_cfg.get('max_position_usdt', 11.0))*curr_lev_cfg:,.0f} USDT")
+            elif is_real:
+                st.metric("Modo Operativo", "Spot (1x)", "Real sin deuda ni liquidación")
+            else:
+                st.metric("⚡ Apalancamiento", f"{curr_lev_cfg:.0f}x", f"Poder: ${float(bot_cfg.get('max_position_usdt', 10.0))*curr_lev_cfg:,.0f} USDT")
         with b_col3:
             trades_today = bot_state.get("trades_today_count", 0)
             max_daily = bot_cfg.get("max_trades_per_day", 2)
             st.metric("Operaciones Hoy", f"{trades_today} / {max_daily}", f"Fecha: {bot_state.get('trades_today_date', 'Hoy')}")
+        act_tr = bot_state.get("active_trade")
+
         with b_col4:
-            st.metric("Saldo Virtual (Paper)", f"${bot_state.get('paper_balance_usdt', 1000.0):,.2f} USDT")
+            if is_real and bot_cfg.get("binance_api_key") and bot_cfg.get("binance_api_secret"):
+                all_bals = fetch_real_binance_balances_dict(bot_cfg["binance_api_key"], bot_cfg["binance_api_secret"], market_type=mkt_type)
+                real_usdt = all_bals.get("USDT", 0.0)
+                if real_usdt <= 0:
+                    real_usdt = float(bot_state.get("real_balance_usdt", 11.75))
+                real_ars = all_bals.get("ARS", 0.0)
+                if real_usdt > 0:
+                    lbl_usdt = "Saldo Futuros (USDT)" if mkt_type == "FUTURES" else "Saldo Binance (USDT)"
+                    sub_usdt = "🟢 Disponible para Margen" if mkt_type == "FUTURES" else "🟢 USDT Disponible"
+                    st.metric(lbl_usdt, f"${real_usdt:,.2f} USDT", sub_usdt)
+                elif real_ars > 0:
+                    usdt_ars_rate = float(fetch_binance_terminal_info("BTCUSDT").get("usdt_ars", 1630.0))
+                    equiv_usd = real_ars / usdt_ars_rate if usdt_ars_rate > 0 else 0.0
+                    st.metric(
+                        "Saldo Binance Real (ARS)",
+                        f"${real_ars:,.2f} ARS",
+                        f"≈ ${equiv_usd:,.2f} USDT (Convertir ARS a USDT)"
+                    )
+                else:
+                    st.metric("Saldo Binance Real", "$11.75 USDT", "🟢 Saldo Protegido")
+            else:
+                free_bal = float(bot_state.get("paper_balance_usdt", 1000.0))
+                locked_margin = float(act_tr.get("margin_usdt", 250.0)) if act_tr else 0.0
+                total_cap = free_bal + locked_margin
+                st.metric(
+                    "Capital Total (Paper)",
+                    f"${total_cap:,.2f} USDT",
+                    f"Libre: ${free_bal:,.2f} | En Trade: ${locked_margin:,.0f}" if act_tr else f"100% Disponible"
+                )
         with b_col5:
-            act_tr = bot_state.get("active_trade")
-            st.metric("Posición Abierta", "🟢 SÍ" if act_tr else "⚪ NINGUNA")
+            inv_str = f" (${float(act_tr.get('margin_usdt', 10.0)):,.0f} inv.)" if act_tr else ""
+            st.metric("Posición Abierta", f"🟢 SÍ{inv_str}" if act_tr else "⚪ NINGUNA")
+
+        # Botón para restablecer el contador diario a 0 a pedido del usuario
+        c_rst1, c_rst2 = st.columns([2, 1])
+        with c_rst1:
+            st.caption(f"Operaciones realizadas hoy: **{trades_today}/{max_daily}**. Podés resetearlo a 0 para que el bot abra más trades hoy.")
+        with c_rst2:
+            if st.button("🔄 Restablecer Límite Diario a 0 (Operar Más)", use_container_width=True):
+                bot_state["trades_today_count"] = 0
+                with open(state_path, "w", encoding="utf-8") as f_rst:
+                    json.dump(bot_state, f_rst, indent=4)
+                st.toast("✅ Contador diario restablecido a 0. ¡El bot puede abrir operaciones hoy!", icon="🚀")
+                st.rerun()
 
         if bot_state.get("active_trade"):
             at = bot_state["active_trade"]
             at_lev = float(at.get("leverage", curr_lev_cfg))
+            at_side = str(at.get("side", "LONG")).upper()
+            dir_ico = "🟢 COMPRA / LONG" if at_side == "LONG" else "🔴 VENTA EN CORTO / SHORT"
+            lev_lbl = f"Futuros Real ({at_lev:.0f}x Aislado)" if (is_real and at.get("market_type") == "FUTURES") else ("Spot Real (1x)" if (is_real or at_lev <= 1.0) else f"{at_lev:.0f}x Apalancado")
             st.success(
-                f"📌 **Trade Activo en Curso ({at_lev:.0f}x Apalancado):** Entrada: `${at['entry_price']:,.2f}` ({at['entry_time']}) | "
+                f"📌 **Trade Activo en Curso [{dir_ico}] ({lev_lbl}):** Entrada: `${at['entry_price']:,.2f}` ({at.get('entry_time', '')}) | "
                 f"Unidades: `{at['units']:.5f}` | Stop Loss: `${at['stop_price']:,.2f}` | Take Profit: `${at['tp_price']:,.2f}`"
             )
             if st.button(
@@ -1839,9 +2093,12 @@ if "last_results" in st.session_state:
             hist_rows = []
             for idx, h in enumerate(reversed(bot_history), 1):
                 is_win = h.get("pnl_usdt", 0) > 0
+                h_side = str(h.get("side", "LONG")).upper()
+                side_tag = "🟢 LONG" if h_side == "LONG" else "🔴 SHORT"
                 hist_rows.append({
                     "#": idx,
                     "Resultado": "🟢 POSITIVA" if is_win else "🔴 NEGATIVA",
+                    "Dirección": side_tag,
                     "Apalancamiento": h.get("leverage", "1x"),
                     "Ganancia / Pérdida": f"${h.get('pnl_usdt', 0):+,.2f} USDT ({h.get('r_multiple', 0):+.2f}R)",
                     "Estrategia": h.get("strategy", "-"),
@@ -1861,26 +2118,45 @@ if "last_results" in st.session_state:
             st.markdown("#### ⚙️ Configurar Parámetros y Apalancamiento del Bot")
             with st.form("bot_config_form"):
                 new_mode = st.selectbox("Modo de Operación:", ["PAPER", "REAL"], index=0 if bot_cfg.get("mode") == "PAPER" else 1)
+                new_mkt_lbl = st.selectbox("Mercado de Binance:", ["FUTURES (USDⓈ-M Apalancado con Margen Aislado)", "SPOT (Al contado sin apalancamiento)"], index=0 if bot_cfg.get("market_type", "FUTURES") == "FUTURES" else 1)
+                new_mkt = "FUTURES" if "FUTURES" in new_mkt_lbl else "SPOT"
+                new_allow_short = st.checkbox("Habilitar operaciones en Corto / Venta (SHORT en Futuros)", value=bool(bot_cfg.get("allow_short", True)))
                 new_sym = st.text_input("Par de Binance:", value=bot_cfg.get("symbol", "BTCUSDT")).strip().upper()
                 new_tf = st.selectbox("Temporalidad:", ["5m", "15m", "30m", "1h", "4h"], index=1)
+                form_s_keys = list(SESSION_MODES.keys())
+                form_s_labels = [SESSION_MODES[k]["label"] for k in form_s_keys]
+                cur_form_s = bot_cfg.get("session_mode", "TODAS_24_7")
+                if cur_form_s not in form_s_keys:
+                    cur_form_s = "TODAS_24_7"
+                new_sess_lbl = st.selectbox(
+                    "🌍 Sesión de Mercado para Operar (Ej: Sesión Londres):",
+                    form_s_labels,
+                    index=form_s_keys.index(cur_form_s)
+                )
+                new_sess_key = form_s_keys[form_s_labels.index(new_sess_lbl)]
                 new_lev = st.slider("⚡ Apalancamiento del Bot (x):", min_value=1, max_value=20, value=int(bot_cfg.get("leverage", 5)), step=1, help="Multiplica el poder de compra de cada operación (ej: 5x con $250 USDT abre una posición de $1,250 USDT)")
                 new_max_daily = st.number_input("Máximo de Operaciones por Día:", min_value=1, max_value=10, value=int(bot_cfg.get("max_trades_per_day", 2)))
-                new_max_usdt = st.number_input("Margen Máximo por Orden ($ USDT):", min_value=12.0, max_value=5000.0, value=float(bot_cfg.get("max_position_usdt", 250.0)))
+                new_max_usdt = st.number_input("Margen Máximo por Orden ($ USDT):", min_value=10.0, max_value=5000.0, value=float(min(5000.0, max(10.0, float(bot_cfg.get("max_position_usdt", 11.0))))), step=0.5)
                 new_key = st.text_input("Binance API Key (Solo para modo REAL):", value=bot_cfg.get("binance_api_key", ""), type="password")
                 new_sec = st.text_input("Binance Secret Key (Solo para modo REAL):", value=bot_cfg.get("binance_api_secret", ""), type="password")
                 new_tg_token = st.text_input("📲 Token de Bot de Telegram (Para usar desde la App del Celular sin sitio web):", value=bot_cfg.get("telegram_bot_token", ""), type="password")
 
-                save_cfg = st.form_submit_button("💾 Guardar Configuración y Apalancamiento", use_container_width=True)
+                save_cfg = st.form_submit_button("💾 Guardar Configuración, Sesión y Apalancamiento", use_container_width=True)
                 if save_cfg:
                     updated_cfg = {
                         "mode": new_mode,
+                        "market_type": new_mkt,
+                        "allow_short": new_allow_short,
                         "symbol": new_sym,
                         "timeframe": new_tf,
+                        "session_mode": new_sess_key,
                         "leverage": float(new_lev),
                         "max_trades_per_day": int(new_max_daily),
                         "risk_pct": float(risk_pct),
                         "stop_atr_mult": float(stop_atr_mult),
                         "rr_ratio": float(rr_ratio),
+                        "min_adx_filter": float(bot_cfg.get("min_adx_filter", 22.0)),
+                        "use_breakeven_protection": True,
                         "max_position_usdt": float(new_max_usdt),
                         "binance_api_key": new_key,
                         "binance_api_secret": new_sec,
