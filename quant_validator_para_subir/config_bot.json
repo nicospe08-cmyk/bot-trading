@@ -12,7 +12,7 @@
     "rr_ratio": 1.5,
     "min_adx_filter": 22.0,
     "use_breakeven_protection": true,
-    "max_position_usdt": 11.0,
+    "max_position_usdt": 100.0,
     "binance_api_key": "kXYWnI3jtRUPobWnivEliPOkpcj6Y18hK0XQxFwWShMBJBkbGpAh0qqXJgrROlit",
     "binance_api_secret": "ThKaOtdhZwxawVdAh1U0ARZG1X7Qal4KtdddZbsnBIA8IuCrggS5BWIIzaGc7e56",
     "telegram_bot_token": "8902461186:AAEYRALaV_cs58YiaTagMFUJkNsKaPQkuLQ",

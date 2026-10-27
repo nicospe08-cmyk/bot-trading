@@ -1,7 +1,7 @@
 {
     "active_trade": null,
     "paper_balance_usdt": 11.41,
-    "last_processed_candle": "2026-10-26 17:15:00",
+    "last_processed_candle": "2026-10-27 01:30:00",
     "total_trades": 15,
     "trades_today_date": "2026-10-26",
     "trades_today_count": 0,
@@ -308,5 +308,5 @@
             "verse": "Y si alguno de vosotros tiene falta de sabidur\u00eda, p\u00eddala a Dios, el cual da a todos abundantemente y sin reproche, y le ser\u00e1 dada. (Santiago 1:5)"
         }
     ],
-    "real_balance_usdt": 10.45637121
+    "real_balance_usdt": 22.32344709
 }
