@@ -46,12 +46,14 @@ def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return atr
 
 
-def calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+def calc_rsi(close: pd.Series, period: int = 14, **kwargs) -> pd.Series:
     """
     Relative Strength Index (RSI) de Wilder.
     RSI = 100 - (100 / (1 + RS))
     Donde RS = GananciaMedia / PerdidaMedia (suavizado Wilder con alpha = 1/period)
     """
+    if "window" in kwargs and kwargs["window"] is not None:
+        period = int(kwargs["window"])
     delta = close.diff()
 
     gain = delta.clip(lower=0)

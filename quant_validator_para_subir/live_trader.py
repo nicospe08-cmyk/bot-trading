@@ -568,7 +568,42 @@ class BinanceLiveTrader:
                 else:
                     # Si no hay posición en Binance pero el estado local decía que sí, limpiar
                     if active_trade is not None:
-                        self._log("[AUTO-SINCRONIZACIÓN BINANCE] La posición fue cerrada externamente en Binance. Limpiando estado local.")
+                        exit_price = current_price
+                        entry_price = float(active_trade.get("entry_price", current_price))
+                        units = float(active_trade.get("units", 0.0))
+                        side = str(active_trade.get("side", "LONG")).upper()
+                        pnl = (exit_price - entry_price) * units if side == "LONG" else (entry_price - exit_price) * units
+                        trade_lev = float(active_trade.get("leverage", self.leverage))
+                        margin_used = float(active_trade.get("margin_usdt", (units * entry_price) / max(1.0, trade_lev)))
+                        roe = (pnl / margin_used * 100.0) if margin_used > 0 else 0.0
+                        stop_dist = float(active_trade.get("stop_distance", 1.0))
+                        r_mult = round(pnl / max(0.01, stop_dist * units), 2)
+
+                        trade_rec = {
+                            "id": len(self.state.get("trade_history", [])) + 1,
+                            "mode": self.mode,
+                            "side": side,
+                            "symbol": self.symbol,
+                            "strategy": active_trade.get("strategy", strategy.display_name),
+                            "leverage": f"{trade_lev:.0f}x",
+                            "entry_time": active_trade.get("entry_time", "-"),
+                            "exit_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "entry_price": round(entry_price, 2),
+                            "exit_price": round(exit_price, 2),
+                            "units": round(units, 4),
+                            "pnl_usdt": round(pnl, 2),
+                            "roe_pct": round(roe, 2),
+                            "r_multiple": r_mult,
+                            "exit_reason": "CIERRE_BINANCE_EXCHANGE",
+                            "status": "POSITIVA (GANANCIA)" if pnl >= 0 else "NEGATIVA (PÉRDIDA)",
+                            "explanation": f"Posición cerrada en exchange Binance ({'Ganancia' if pnl >= 0 else 'Pérdida'} de ${pnl:+.2f} USDT).",
+                            "verse": get_random_verse()
+                        }
+                        if "trade_history" not in self.state:
+                            self.state["trade_history"] = []
+                        self.state["trade_history"].append(trade_rec)
+                        self.state["total_trades"] = len(self.state["trade_history"])
+                        self._log(f"[AUTO-SINCRONIZACIÓN BINANCE] Operación cerrada registrada en historial: {trade_rec['status']} ({pnl:+.2f} USDT). Limpiando estado local.")
                         self.state["active_trade"] = None
                         self._save_state()
                         active_trade = None
@@ -831,7 +866,7 @@ class BinanceLiveTrader:
                 return
 
             # Filtro Anti-Agotamiento de Tendencia con RSI(14)
-            rsi_series = calc_rsi(df['close'], window=14)
+            rsi_series = calc_rsi(df['close'], 14)
             current_rsi = float(rsi_series.iloc[-1])
             self._log(f"[FILTRO ANTI-AGOTAMIENTO] RSI(14): {current_rsi:.1f}")
 

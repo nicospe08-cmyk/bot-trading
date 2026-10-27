@@ -2134,8 +2134,8 @@ if "last_results" in st.session_state:
                     index=form_s_keys.index(cur_form_s)
                 )
                 new_sess_key = form_s_keys[form_s_labels.index(new_sess_lbl)]
-                new_lev = st.slider("⚡ Apalancamiento del Bot (x):", min_value=1, max_value=20, value=int(bot_cfg.get("leverage", 5)), step=1, help="Multiplica el poder de compra de cada operación (ej: 5x con $250 USDT abre una posición de $1,250 USDT)")
-                new_max_daily = st.number_input("Máximo de Operaciones por Día:", min_value=1, max_value=10, value=int(bot_cfg.get("max_trades_per_day", 2)))
+                new_lev = st.slider("⚡ Apalancamiento del Bot (x):", min_value=1, max_value=50, value=int(min(50, max(1, int(bot_cfg.get("leverage", 25))))), step=1, help="Multiplica el poder de compra de cada operación (ej: 25x con $20 USDT abre una posición de $500 USDT)")
+                new_max_daily = st.number_input("Máximo de Operaciones por Día:", min_value=1, max_value=10, value=int(bot_cfg.get("max_trades_per_day", 5)))
                 new_max_usdt = st.number_input("Margen Máximo por Orden ($ USDT):", min_value=10.0, max_value=5000.0, value=float(min(5000.0, max(10.0, float(bot_cfg.get("max_position_usdt", 11.0))))), step=0.5)
                 new_key = st.text_input("Binance API Key (Solo para modo REAL):", value=bot_cfg.get("binance_api_key", ""), type="password")
                 new_sec = st.text_input("Binance Secret Key (Solo para modo REAL):", value=bot_cfg.get("binance_api_secret", ""), type="password")
